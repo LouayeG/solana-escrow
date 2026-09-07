@@ -71,4 +71,35 @@ describe("escrow", () => {
     assert.equal(Number((await getAccount(connection, makerAtaA)).amount), 1_000_000_000);
     assert.equal(Number((await getAccount(connection, takerAtaB)).amount), 1_000_000_000);
   });
+
+  it("make: opens an offer and locks token A", async () => {
+    const seed = 1;
+    const escrow = escrowPda(seed);
+    const vault = vaultFor(escrow);
+
+    await program.methods
+      .make(new BN(seed), DEPOSIT, RECEIVE)
+      .accountsPartial({
+        maker: maker.publicKey,
+        mintA,
+        mintB,
+        escrow,
+        vault,
+        makerAtaA,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    // The deposit is now held in the vault.
+    assert.equal(Number((await getAccount(connection, vault)).amount), DEPOSIT.toNumber());
+
+    // The offer's terms are recorded on-chain.
+    const state = await program.account.escrow.fetch(escrow);
+    assert.equal(state.maker.toBase58(), maker.publicKey.toBase58());
+    assert.equal(state.mintA.toBase58(), mintA.toBase58());
+    assert.equal(state.mintB.toBase58(), mintB.toBase58());
+    assert.equal(state.receive.toNumber(), RECEIVE.toNumber());
+  });
 });
