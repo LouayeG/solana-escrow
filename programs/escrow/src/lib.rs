@@ -13,6 +13,10 @@
 // ============================================================================
 
 use anchor_lang::prelude::*;
+use anchor_spl::{
+    associated_token::AssociatedToken,
+    token::{self, Mint, Token, TokenAccount, Transfer},
+};
 
 // Anchor's default placeholder ID. `anchor keys sync` overwrites it with the
 // real program key after the first build.
@@ -21,6 +25,84 @@ declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 #[program]
 pub mod escrow {
     use super::*;
+
+    /// Open an offer: record its terms and move `deposit` units of token A from
+    /// the maker into a PDA-owned vault. The maker signs the transaction, so
+    /// moving their own tokens is a plain CPI — no PDA signing needed here.
+    pub fn make(ctx: Context<Make>, seed: u64, deposit: u64, receive: u64) -> Result<()> {
+        require!(deposit > 0 && receive > 0, EscrowError::ZeroAmount);
+
+        // Record the terms of the deal in the escrow account.
+        ctx.accounts.escrow.set_inner(Escrow {
+            seed,
+            maker: ctx.accounts.maker.key(),
+            mint_a: ctx.accounts.mint_a.key(),
+            mint_b: ctx.accounts.mint_b.key(),
+            receive,
+            bump: ctx.bumps.escrow,
+        });
+
+        // Lock the maker's token A in the vault.
+        let cpi_ctx = CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.maker_ata_a.to_account_info(),
+                to: ctx.accounts.vault.to_account_info(),
+                authority: ctx.accounts.maker.to_account_info(),
+            },
+        );
+        token::transfer(cpi_ctx, deposit)?;
+
+        msg!("Offer {} opened: deposit locked, wants {} of mint_b", seed, receive);
+        Ok(())
+    }
+}
+
+// ============================================================================
+//  ACCOUNT CONTEXTS
+// ============================================================================
+
+#[derive(Accounts)]
+#[instruction(seed: u64)]
+pub struct Make<'info> {
+    #[account(mut)]
+    pub maker: Signer<'info>,
+
+    pub mint_a: Account<'info, Mint>,
+    pub mint_b: Account<'info, Mint>,
+
+    /// The offer account. Seeded by the maker and their chosen `seed`, so the
+    /// same maker can run multiple offers in parallel.
+    #[account(
+        init,
+        payer = maker,
+        space = 8 + Escrow::INIT_SPACE,
+        seeds = [b"escrow", maker.key().as_ref(), seed.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub escrow: Account<'info, Escrow>,
+
+    /// Holds the maker's token A until the deal settles. It is an associated
+    /// token account owned by the escrow PDA, so only this program can move it.
+    #[account(
+        init,
+        payer = maker,
+        associated_token::mint = mint_a,
+        associated_token::authority = escrow,
+    )]
+    pub vault: Account<'info, TokenAccount>,
+
+    /// The maker's own token-A account, which funds the deposit.
+    #[account(
+        mut,
+        constraint = maker_ata_a.mint == mint_a.key() @ EscrowError::WrongMint,
+        constraint = maker_ata_a.owner == maker.key() @ EscrowError::WrongOwner
+    )]
+    pub maker_ata_a: Account<'info, TokenAccount>,
+
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
 }
 
 // ============================================================================
