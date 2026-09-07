@@ -178,4 +178,78 @@ describe("escrow", () => {
     assert.isNull(await connection.getAccountInfo(escrow), "escrow should be closed");
     assert.isNull(await connection.getAccountInfo(vault), "vault should be closed");
   });
+
+  it("rejects an offer with a zero amount", async () => {
+    const seed = 3;
+    const escrow = escrowPda(seed);
+    const vault = vaultFor(escrow);
+
+    let rejected = false;
+    try {
+      await program.methods
+        .make(new BN(seed), new BN(0), RECEIVE) // zero deposit
+        .accountsPartial({
+          maker: maker.publicKey,
+          mintA,
+          mintB,
+          escrow,
+          vault,
+          makerAtaA,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+    } catch (err: any) {
+      rejected = true;
+      assert.include(err.toString(), "ZeroAmount");
+    }
+    assert.isTrue(rejected, "a zero-amount offer must be rejected");
+  });
+
+  it("refuses to let a stranger cancel someone else's offer", async () => {
+    const seed = 4;
+    const escrow = escrowPda(seed);
+    const vault = vaultFor(escrow);
+
+    // Maker opens a real offer.
+    await program.methods
+      .make(new BN(seed), DEPOSIT, RECEIVE)
+      .accountsPartial({
+        maker: maker.publicKey,
+        mintA,
+        mintB,
+        escrow,
+        vault,
+        makerAtaA,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    // The taker tries to cancel it and pocket the deposit.
+    const attackerAtaA = getAssociatedTokenAddressSync(mintA, taker.publicKey);
+    let rejected = false;
+    try {
+      await program.methods
+        .cancel()
+        .accountsPartial({
+          maker: taker.publicKey, // wrong maker -> derives a different PDA
+          mintA,
+          escrow,
+          vault,
+          makerAtaA: attackerAtaA,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([taker])
+        .rpc();
+    } catch {
+      rejected = true;
+    }
+    assert.isTrue(rejected, "only the maker can cancel their offer");
+
+    // The real offer is untouched.
+    assert.equal(Number((await getAccount(connection, vault)).amount), DEPOSIT.toNumber());
+  });
 });
