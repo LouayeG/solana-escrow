@@ -53,6 +53,15 @@ pub mod escrow {
         );
         token::transfer(cpi_ctx, deposit)?;
 
+        emit!(OfferMade {
+            escrow: ctx.accounts.escrow.key(),
+            maker: ctx.accounts.maker.key(),
+            mint_a: ctx.accounts.mint_a.key(),
+            mint_b: ctx.accounts.mint_b.key(),
+            seed,
+            deposit,
+            receive,
+        });
         msg!("Offer {} opened: deposit locked, wants {} of mint_b", seed, receive);
         Ok(())
     }
@@ -94,6 +103,11 @@ pub mod escrow {
         );
         token::close_account(cpi_ctx)?;
 
+        emit!(OfferCancelled {
+            escrow: ctx.accounts.escrow.key(),
+            maker: ctx.accounts.maker.key(),
+            seed: ctx.accounts.escrow.seed,
+        });
         msg!("Offer {} cancelled; deposit returned", ctx.accounts.escrow.seed);
         Ok(())
     }
@@ -146,6 +160,12 @@ pub mod escrow {
         );
         token::close_account(cpi_ctx)?;
 
+        emit!(OfferTaken {
+            escrow: ctx.accounts.escrow.key(),
+            maker: ctx.accounts.maker.key(),
+            taker: ctx.accounts.taker.key(),
+            seed: ctx.accounts.escrow.seed,
+        });
         msg!("Offer {} filled", ctx.accounts.escrow.seed);
         Ok(())
     }
@@ -322,6 +342,38 @@ pub struct Escrow {
     pub receive: u64,
     /// Canonical bump for the escrow PDA.
     pub bump: u8,
+}
+
+// ============================================================================
+//  EVENTS
+//  Structured logs off-chain indexers can subscribe to instead of scraping
+//  free-text messages.
+// ============================================================================
+
+#[event]
+pub struct OfferMade {
+    pub escrow: Pubkey,
+    pub maker: Pubkey,
+    pub mint_a: Pubkey,
+    pub mint_b: Pubkey,
+    pub seed: u64,
+    pub deposit: u64,
+    pub receive: u64,
+}
+
+#[event]
+pub struct OfferTaken {
+    pub escrow: Pubkey,
+    pub maker: Pubkey,
+    pub taker: Pubkey,
+    pub seed: u64,
+}
+
+#[event]
+pub struct OfferCancelled {
+    pub escrow: Pubkey,
+    pub maker: Pubkey,
+    pub seed: u64,
 }
 
 // ============================================================================
