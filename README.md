@@ -1,5 +1,9 @@
 # Solana Escrow
 
+[![CI](https://github.com/LouayeG/solana-escrow/actions/workflows/ci.yml/badge.svg)](https://github.com/LouayeG/solana-escrow/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Anchor](https://img.shields.io/badge/Anchor-0.31.1-blue.svg)](https://www.anchor-lang.com/)
+
 A beginner-friendly, trust-minimized **token escrow** built with Anchor. A
 *maker* offers some of token **A** in exchange for a set amount of token **B**; a
 *taker* fills the offer, and the swap settles **atomically** — both legs succeed
