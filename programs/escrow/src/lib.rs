@@ -97,6 +97,58 @@ pub mod escrow {
         msg!("Offer {} cancelled; deposit returned", ctx.accounts.escrow.seed);
         Ok(())
     }
+
+    /// Fill an offer. The taker pays the maker `receive` units of token B, and
+    /// the same transaction releases the vault's token A to the taker. Both legs
+    /// settle together or the whole transaction reverts — that atomicity is the
+    /// entire reason neither party has to trust the other.
+    pub fn take(ctx: Context<Take>) -> Result<()> {
+        // Leg 1: taker -> maker, in token B. The taker signs for their own funds.
+        let cpi_ctx = CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.taker_ata_b.to_account_info(),
+                to: ctx.accounts.maker_ata_b.to_account_info(),
+                authority: ctx.accounts.taker.to_account_info(),
+            },
+        );
+        token::transfer(cpi_ctx, ctx.accounts.escrow.receive)?;
+
+        // Leg 2: vault -> taker, in token A. The vault is owned by the escrow
+        // PDA, so the program signs with the escrow's seeds.
+        let maker_key = ctx.accounts.maker.key();
+        let seed_bytes = ctx.accounts.escrow.seed.to_le_bytes();
+        let bump = ctx.accounts.escrow.bump;
+        let signer_seeds: &[&[&[u8]]] =
+            &[&[b"escrow", maker_key.as_ref(), seed_bytes.as_ref(), &[bump]]];
+
+        let amount = ctx.accounts.vault.amount;
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.vault.to_account_info(),
+                to: ctx.accounts.taker_ata_a.to_account_info(),
+                authority: ctx.accounts.escrow.to_account_info(),
+            },
+            signer_seeds,
+        );
+        token::transfer(cpi_ctx, amount)?;
+
+        // Close the emptied vault (rent to the maker); Anchor closes the escrow.
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            CloseAccount {
+                account: ctx.accounts.vault.to_account_info(),
+                destination: ctx.accounts.maker.to_account_info(),
+                authority: ctx.accounts.escrow.to_account_info(),
+            },
+            signer_seeds,
+        );
+        token::close_account(cpi_ctx)?;
+
+        msg!("Offer {} filled", ctx.accounts.escrow.seed);
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -180,6 +232,70 @@ pub struct Cancel<'info> {
     pub maker_ata_a: Account<'info, TokenAccount>,
 
     pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct Take<'info> {
+    #[account(mut)]
+    pub taker: Signer<'info>,
+
+    /// The maker receives the token-B payment and the reclaimed rent. Not a
+    /// signer here — `has_one = maker` on the escrow pins it to the real maker,
+    /// so the taker can't redirect the payout.
+    #[account(mut)]
+    pub maker: SystemAccount<'info>,
+
+    pub mint_a: Account<'info, Mint>,
+    pub mint_b: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        close = maker,
+        has_one = maker,
+        has_one = mint_a,
+        has_one = mint_b,
+        seeds = [b"escrow", maker.key().as_ref(), escrow.seed.to_le_bytes().as_ref()],
+        bump = escrow.bump
+    )]
+    pub escrow: Account<'info, Escrow>,
+
+    #[account(
+        mut,
+        associated_token::mint = mint_a,
+        associated_token::authority = escrow,
+    )]
+    pub vault: Account<'info, TokenAccount>,
+
+    /// Where the taker receives token A. `init_if_needed` creates it on demand;
+    /// safe here because an ATA's address is deterministic and idempotent.
+    #[account(
+        init_if_needed,
+        payer = taker,
+        associated_token::mint = mint_a,
+        associated_token::authority = taker,
+    )]
+    pub taker_ata_a: Account<'info, TokenAccount>,
+
+    /// The taker's token-B account, which funds the payment.
+    #[account(
+        mut,
+        constraint = taker_ata_b.mint == mint_b.key() @ EscrowError::WrongMint,
+        constraint = taker_ata_b.owner == taker.key() @ EscrowError::WrongOwner
+    )]
+    pub taker_ata_b: Account<'info, TokenAccount>,
+
+    /// Where the maker receives token B. Created on demand if it doesn't exist.
+    #[account(
+        init_if_needed,
+        payer = taker,
+        associated_token::mint = mint_b,
+        associated_token::authority = maker,
+    )]
+    pub maker_ata_b: Account<'info, TokenAccount>,
+
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
 }
 
 // ============================================================================
