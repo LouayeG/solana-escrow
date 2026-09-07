@@ -102,4 +102,39 @@ describe("escrow", () => {
     assert.equal(state.mintB.toBase58(), mintB.toBase58());
     assert.equal(state.receive.toNumber(), RECEIVE.toNumber());
   });
+
+  it("take: fills the offer atomically", async () => {
+    const seed = 1; // the offer opened in the make test
+    const escrow = escrowPda(seed);
+    const vault = vaultFor(escrow);
+    const takerAtaA = getAssociatedTokenAddressSync(mintA, taker.publicKey);
+    const makerAtaB = getAssociatedTokenAddressSync(mintB, maker.publicKey);
+
+    await program.methods
+      .take()
+      .accountsPartial({
+        taker: taker.publicKey,
+        maker: maker.publicKey,
+        mintA,
+        mintB,
+        escrow,
+        vault,
+        takerAtaA,
+        takerAtaB,
+        makerAtaB,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([taker])
+      .rpc();
+
+    // Both legs settled: taker received token A, maker received token B.
+    assert.equal(Number((await getAccount(connection, takerAtaA)).amount), DEPOSIT.toNumber());
+    assert.equal(Number((await getAccount(connection, makerAtaB)).amount), RECEIVE.toNumber());
+
+    // The offer is fully wound down.
+    assert.isNull(await connection.getAccountInfo(escrow), "escrow should be closed");
+    assert.isNull(await connection.getAccountInfo(vault), "vault should be closed");
+  });
 });
