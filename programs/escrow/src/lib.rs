@@ -62,7 +62,11 @@ pub mod escrow {
             deposit,
             receive,
         });
-        msg!("Offer {} opened: deposit locked, wants {} of mint_b", seed, receive);
+        msg!(
+            "Offer {} opened: deposit locked, wants {} of mint_b",
+            seed,
+            receive
+        );
         Ok(())
     }
 
@@ -108,7 +112,10 @@ pub mod escrow {
             maker: ctx.accounts.maker.key(),
             seed: ctx.accounts.escrow.seed,
         });
-        msg!("Offer {} cancelled; deposit returned", ctx.accounts.escrow.seed);
+        msg!(
+            "Offer {} cancelled; deposit returned",
+            ctx.accounts.escrow.seed
+        );
         Ok(())
     }
 
