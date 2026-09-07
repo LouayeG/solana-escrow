@@ -15,7 +15,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{self, Mint, Token, TokenAccount, Transfer},
+    token::{self, CloseAccount, Mint, Token, TokenAccount, Transfer},
 };
 
 // Anchor's default placeholder ID. `anchor keys sync` overwrites it with the
@@ -54,6 +54,47 @@ pub mod escrow {
         token::transfer(cpi_ctx, deposit)?;
 
         msg!("Offer {} opened: deposit locked, wants {} of mint_b", seed, receive);
+        Ok(())
+    }
+
+    /// Cancel an open offer: the maker reclaims their token A, then the vault
+    /// and escrow accounts are closed with their rent refunded to the maker.
+    /// The vault is owned by the escrow PDA, so the program signs for it.
+    pub fn cancel(ctx: Context<Cancel>) -> Result<()> {
+        // Rebuild the escrow PDA's seeds so it can sign the transfer and close.
+        let maker_key = ctx.accounts.maker.key();
+        let seed_bytes = ctx.accounts.escrow.seed.to_le_bytes();
+        let bump = ctx.accounts.escrow.bump;
+        let signer_seeds: &[&[&[u8]]] =
+            &[&[b"escrow", maker_key.as_ref(), seed_bytes.as_ref(), &[bump]]];
+
+        // Return every token A held in the vault to the maker.
+        let amount = ctx.accounts.vault.amount;
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.vault.to_account_info(),
+                to: ctx.accounts.maker_ata_a.to_account_info(),
+                authority: ctx.accounts.escrow.to_account_info(),
+            },
+            signer_seeds,
+        );
+        token::transfer(cpi_ctx, amount)?;
+
+        // Close the now-empty vault; its rent goes back to the maker. The
+        // escrow account is closed by Anchor via `close = maker`.
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            CloseAccount {
+                account: ctx.accounts.vault.to_account_info(),
+                destination: ctx.accounts.maker.to_account_info(),
+                authority: ctx.accounts.escrow.to_account_info(),
+            },
+            signer_seeds,
+        );
+        token::close_account(cpi_ctx)?;
+
+        msg!("Offer {} cancelled; deposit returned", ctx.accounts.escrow.seed);
         Ok(())
     }
 }
@@ -103,6 +144,42 @@ pub struct Make<'info> {
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Cancel<'info> {
+    #[account(mut)]
+    pub maker: Signer<'info>,
+
+    pub mint_a: Account<'info, Mint>,
+
+    /// The offer being cancelled. `has_one` re-checks the stored maker/mint_a,
+    /// `close = maker` refunds its rent, and the seeds prove it's the right PDA.
+    #[account(
+        mut,
+        close = maker,
+        has_one = maker,
+        has_one = mint_a,
+        seeds = [b"escrow", maker.key().as_ref(), escrow.seed.to_le_bytes().as_ref()],
+        bump = escrow.bump
+    )]
+    pub escrow: Account<'info, Escrow>,
+
+    #[account(
+        mut,
+        associated_token::mint = mint_a,
+        associated_token::authority = escrow,
+    )]
+    pub vault: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = maker_ata_a.mint == mint_a.key() @ EscrowError::WrongMint,
+        constraint = maker_ata_a.owner == maker.key() @ EscrowError::WrongOwner
+    )]
+    pub maker_ata_a: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
 }
 
 // ============================================================================
