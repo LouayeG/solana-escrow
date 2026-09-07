@@ -137,4 +137,45 @@ describe("escrow", () => {
     assert.isNull(await connection.getAccountInfo(escrow), "escrow should be closed");
     assert.isNull(await connection.getAccountInfo(vault), "vault should be closed");
   });
+
+  it("cancel: maker reclaims the deposit", async () => {
+    const seed = 2; // a fresh offer just for this test
+    const escrow = escrowPda(seed);
+    const vault = vaultFor(escrow);
+
+    const balanceBefore = Number((await getAccount(connection, makerAtaA)).amount);
+
+    await program.methods
+      .make(new BN(seed), DEPOSIT, RECEIVE)
+      .accountsPartial({
+        maker: maker.publicKey,
+        mintA,
+        mintB,
+        escrow,
+        vault,
+        makerAtaA,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    await program.methods
+      .cancel()
+      .accountsPartial({
+        maker: maker.publicKey,
+        mintA,
+        escrow,
+        vault,
+        makerAtaA,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .rpc();
+
+    // The deposit came all the way back — net zero for the maker.
+    const balanceAfter = Number((await getAccount(connection, makerAtaA)).amount);
+    assert.equal(balanceAfter, balanceBefore);
+    assert.isNull(await connection.getAccountInfo(escrow), "escrow should be closed");
+    assert.isNull(await connection.getAccountInfo(vault), "vault should be closed");
+  });
 });
